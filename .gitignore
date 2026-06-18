@@ -28,6 +28,10 @@ ENV/
 
 # Environment Variables
 .env
+.env.local
+
+# MCP Configuration (contains sensitive tokens)
+mcp-config.json
 
 # IDE
 .vscode/
@@ -44,9 +48,12 @@ htmlcov/
 # Logs
 *.log
 logs/
+npm-debug.log*
+
+# Frontend
+node_modules/
 
 # OS
 .DS_Store
 Thumbs.db
-
 # Made with Bob

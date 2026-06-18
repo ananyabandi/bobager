@@ -91,3 +91,22 @@ bobager/
 - The repo was trimmed to the Slack chat and FastAPI backend surface.
 - Generated coverage and cache artifacts are intentionally not kept in the tree.
 - Docker files are still present if you want containerization later.
+
+## Frontend UI
+
+This branch now includes a static chat UI from the referenced commit:
+
+- `index.html`
+- `styles.css`
+- `app.js`
+- `logo.png`
+
+Run it locally with:
+
+```bash
+python3 -m http.server 8080
+```
+
+Then open `http://localhost:8080`.
+
+The imported UI currently uses local canned responses in `app.js`; next step is wiring it to your backend endpoint so it fully replaces CLI usage.
