@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  bobager-api:
+    build: .
+    container_name: bobager-api
+    ports:
+      - "8000:8000"
+    environment:
+      - SLACK_MCP_HOST=${SLACK_MCP_HOST:-localhost}
+      - SLACK_MCP_PORT=${SLACK_MCP_PORT:-3000}
+      - SLACK_MCP_TRANSPORT=${SLACK_MCP_TRANSPORT:-stdio}
+      - BOB_API_URL=${BOB_API_URL}
+      - BOB_API_KEY=${BOB_API_KEY}
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - DEBUG=${DEBUG:-False}
+      - CACHE_TTL=${CACHE_TTL:-3600}
+      - CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-1000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+# Made with Bob
