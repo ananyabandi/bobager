@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bobager AI Chat</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <img src="./logo.png" alt="Bobager icon" class="brand-logo" />
+          <div>
+            <h1>Bobager</h1>
+            <p class="subtitle">AI Chat Assistant</p>
+          </div>
+        </div>
+      </header>
+
+      <main class="main-grid">
+        <div class="panel card panel-accent welcome-panel">
+          <h2>Welcome!</h2>
+          <p>Ask anything about design, development, or AI integration.</p>
+        </div>
+
+        <section class="chat-card card chat-area">
+          <div class="chat-header">
+            <div class="chat-avatar-wrap">
+              <img src="./logo.png" alt="Bot avatar" class="chat-avatar" />
+            </div>
+            <div>
+              <p class="chat-title">Bobager Assistant</p>
+              <p class="chat-subtitle">A friendly AI interface for your project.</p>
+            </div>
+          </div>
+
+          <div id="messageWindow" class="message-window" aria-live="polite"></div>
+
+          <form id="chatForm" class="chat-form">
+            <label class="sr-only" for="userInput">Message</label>
+            <textarea id="userInput" rows="2" placeholder="Type a message..." required></textarea>
+            <button type="submit">Send</button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

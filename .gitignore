@@ -1,0 +1,23 @@
+# MCP Configuration (contains sensitive tokens)
+mcp-config.json
+
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Made with Bob
