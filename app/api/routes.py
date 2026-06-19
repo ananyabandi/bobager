@@ -11,13 +11,16 @@ from app.models.schemas import (
     AnalysisResponse,
     SearchRequest,
     SearchResponse,
-    HealthResponse
+    HealthResponse,
+    ChatRequest,
+    ChatResponse,
 )
 from app.services.analysis_service import analysis_service
 from app.services.slack_client import slack_client
 from app.services.ollama_client import ollama_client
 from app.utils.logger import setup_logger
 from app.utils.cache import cache_manager
+from chat_with_slack import parse_user_query, execute_tool, format_results
 from app import __version__
 
 logger = setup_logger(__name__)
@@ -230,6 +233,33 @@ async def search_topic(request: SearchRequest):
         
     except Exception as e:
         logger.error(f"Error in search for query '{request.query}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Chat-style endpoint that mirrors the CLI flow."""
+    try:
+        tool_call = await parse_user_query(request.message)
+        tool_name = tool_call.get("tool")
+        params = tool_call.get("params", {})
+
+        if not tool_name:
+            raise ValueError("No tool selected for the given message")
+
+        results = await execute_tool(tool_name, params)
+        formatted_response = await format_results(tool_name, results, request.message)
+
+        return ChatResponse(
+            message=request.message,
+            tool=tool_name,
+            params=params,
+            response=formatted_response,
+            timestamp=datetime.now(),
+        )
+
+    except Exception as e:
+        logger.error(f"Error in chat for message '{request.message}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

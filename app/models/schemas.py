@@ -45,6 +45,20 @@ class SearchResponse(BaseModel):
     timestamp: datetime
 
 
+class ChatRequest(BaseModel):
+    """Request model for chat-style natural language interaction."""
+    message: str = Field(..., min_length=1, description="User message to analyze")
+
+
+class ChatResponse(BaseModel):
+    """Response model for chat-style natural language interaction."""
+    message: str
+    tool: str
+    params: Dict[str, Any]
+    response: str
+    timestamp: datetime
+
+
 class UserProfile(BaseModel):
     """User profile information."""
     user_id: str

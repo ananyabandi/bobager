@@ -104,9 +104,14 @@ This branch now includes a static chat UI from the referenced commit:
 Run it locally with:
 
 ```bash
+# Terminal 1: API
+source venv/bin/activate
+python -m uvicorn app.main:app --reload
+
+# Terminal 2: static UI
 python3 -m http.server 8080
 ```
 
 Then open `http://localhost:8080`.
 
-The imported UI currently uses local canned responses in `app.js`; next step is wiring it to your backend endpoint so it fully replaces CLI usage.
+The UI now calls `POST /api/v1/chat` on `http://localhost:8000`, which uses the same parser/tool pipeline as `chat_with_slack.py`.
