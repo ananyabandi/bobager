@@ -1,0 +1,25 @@
+{
+  "name": "bobager",
+  "version": "1.0.0",
+  "description": "A chatbot interface with GitHub MCP integration",
+  "main": "server.js",
+  "scripts": {
+    "start": "GITHUB_PERSONAL_ACCESS_TOKEN=$(cat mcp-config.json | grep GITHUB_PERSONAL_ACCESS_TOKEN | cut -d'\"' -f4) node server.js",
+    "dev": "GITHUB_PERSONAL_ACCESS_TOKEN=$(cat mcp-config.json | grep GITHUB_PERSONAL_ACCESS_TOKEN | cut -d'\"' -f4) nodemon server.js"
+  },
+  "keywords": [
+    "chatbot",
+    "github",
+    "mcp",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
