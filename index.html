@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bobager AI Chat</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a" aria-hidden="true"></div>
+    <div class="bg-orb orb-b" aria-hidden="true"></div>
+
+    <div class="app-shell fade-in">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <img src="./BobStanding-C5BdpngO.png" alt="Bobager icon" class="brand-logo" />
+          <div>
+            <p class="eyebrow">Slack + GitHub Intelligence</p>
+            <h1>Bobager</h1>
+            <p class="subtitle">Ask natural language questions about your workspace conversations and GitHub repositories.</p>
+          </div>
+        </div>
+
+        <div class="topbar-meta card-soft">
+          <span class="status-dot" aria-hidden="true"></span>
+          Live Analysis Interface
+        </div>
+      </header>
+
+      <main class="main-grid">
+        <aside class="sidebar">
+          <section class="panel card panel-accent">
+            <h2>Slack Questions</h2>
+            <ul class="quick-list">
+              <li>Who can help me with HTML in our team?</li>
+              <li>What does Anna Bob&apos;s code snippet do?</li>
+              <li>Who mentioned devops the most this month?</li>
+            </ul>
+          </section>
+
+          <section class="panel card panel-accent">
+            <h2>GitHub Questions</h2>
+            <ul class="quick-list">
+              <li>Search for AI repositories</li>
+              <li>Show me facebook/react/README.md</li>
+              <li>List commits from owner/repo</li>
+            </ul>
+          </section>
+
+          <section class="panel card">
+            <h2>How It Works</h2>
+            <p>
+              Bobager routes your question through Slack expert search, contributor ranking,
+              or custom analysis and returns a structured response from live Slack data.
+            </p>
+          </section>
+        </aside>
+
+        <section class="chat-card card chat-area">
+          <div class="chat-header">
+            <div class="chat-avatar-wrap">
+              <img src="./BobStanding-C5BdpngO.png" alt="Bot avatar" class="chat-avatar" />
+            </div>
+            <div>
+              <p class="chat-title">Bobager Assistant</p>
+              <p class="chat-subtitle">Connected to your backend on port 8000.</p>
+            </div>
+          </div>
+
+          <div id="messageWindow" class="message-window" aria-live="polite"></div>
+
+          <form id="chatForm" class="chat-form">
+            <label class="sr-only" for="userInput">Message</label>
+            <textarea id="userInput" rows="2" placeholder="Type a message..." required></textarea>
+            <button type="submit">Send</button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
