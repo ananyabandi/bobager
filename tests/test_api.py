@@ -375,6 +375,76 @@ async def test_custom_analysis_uses_fallback_search_terms_for_code_questions():
     assert result.insights == "Anna Bob shared HTML for a simple Snake game page."
 
 
+def test_build_custom_analysis_search_terms_for_person_topic_query():
+    """Person-topic questions should include author-focused Slack search terms."""
+    terms = analysis_service._build_custom_analysis_search_terms(
+        "What does Anna Bob talk about?"
+    )
+
+    assert "What does Anna Bob talk about?" in terms
+    assert 'from:"Anna Bob"' in terms
+    assert "Anna Bob" in terms
+
+
+@pytest.mark.asyncio
+async def test_custom_analysis_search_aggregates_across_terms():
+    """Custom analysis should continue searching fallback terms after an initial hit."""
+    cache_manager.clear()
+    first_messages = [
+        {
+            "ts": "111.111",
+            "user": "U999",
+            "channel": "general",
+            "text": "Thanks Anna Bob!",
+        }
+    ]
+    second_messages = [
+        {
+            "ts": "222.222",
+            "user": "U123",
+            "channel": "frontend",
+            "text": "Here is my HTML snippet",
+        }
+    ]
+    user_profiles = {
+        "U999": {"id": "U999", "name": "david", "real_name": "David"},
+        "U123": {"id": "U123", "name": "anna.bob", "real_name": "Anna Bob"},
+    }
+
+    async def fake_get_messages_by_topic(topic, timeframe_days=30, channels=None):
+        if topic == "What does Anna Bob talk about?":
+            return first_messages
+        if topic in {'from:"Anna Bob"', '"Anna Bob"', 'Anna Bob'}:
+            return second_messages
+        return []
+
+    with patch.object(
+        analysis_service.slack_service,
+        "get_messages_by_topic",
+        new=AsyncMock(side_effect=fake_get_messages_by_topic),
+    ) as mock_get_messages, \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(
+             analysis_service.ollama_client,
+             "custom_analysis",
+             new=AsyncMock(
+                 return_value={
+                     "insights": "Anna Bob mostly shares HTML examples.",
+                     "relevant_users": [],
+                     "key_messages": []
+                 }
+             ),
+         ) as mock_custom_analysis:
+        result = await analysis_service.custom_analysis("What does Anna Bob talk about?")
+
+    searched_terms = [call.kwargs["topic"] for call in mock_get_messages.await_args_list]
+    assert len(searched_terms) > 1
+    assert 'from:"Anna Bob"' in searched_terms
+    analyzed_messages = mock_custom_analysis.await_args.kwargs["messages"]
+    assert len(analyzed_messages) == 2
+    assert result.insights == "Anna Bob mostly shares HTML examples."
+
+
 @pytest.mark.asyncio
 async def test_find_experts_default_min_messages_includes_single_match():
     """Default expert lookup should include a real helper even with only one matching message."""

@@ -99,17 +99,32 @@ class AnalysisService:
         terms: List[str] = [normalized_query] if normalized_query else []
         lowered = normalized_query.lower()
         mentions_code = "code" in lowered
-
-        name_matches = re.findall(
-            r"(?:code\s+)?([a-z]+\s+[a-z]+)\s+(?:wrote|posted|put)",
-            lowered,
+        asks_about_person_topics = (
+            "talk about" in lowered
+            or "talks about" in lowered
+            or "discuss" in lowered
+            or "what does" in lowered
         )
+
+        name_matches = re.findall(r"(?:code\s+)?([a-z]+\s+[a-z]+)\s+(?:wrote|posted|put)", lowered)
+        if not name_matches:
+            name_matches = re.findall(
+                r"(?:what\s+does\s+)?([a-z]+\s+[a-z]+)\s+(?:talk\s+about|talks\s+about|discuss(?:\s+about)?)",
+                lowered,
+            )
 
         for raw_name in name_matches:
             cleaned_name = " ".join(part.capitalize() for part in raw_name.split())
+
+            if asks_about_person_topics:
+                terms.append(f'from:"{cleaned_name}"')
+                terms.append(f"from:{cleaned_name.replace(' ', '.')}")
+
             if mentions_code:
                 terms.append(f'"{cleaned_name}" code')
                 terms.append(f"{cleaned_name} code")
+
+            terms.append(f'"{cleaned_name}"')
             terms.append(cleaned_name)
 
         if mentions_code and not name_matches:
@@ -138,6 +153,7 @@ class AnalysisService:
         search_terms = self._build_custom_analysis_search_terms(query)
         combined_messages: List[Dict[str, Any]] = []
         seen_messages = set()
+        max_messages = 200
 
         for search_term in search_terms:
             messages = await self.slack_service.get_messages_by_topic(
@@ -156,9 +172,8 @@ class AnalysisService:
                     continue
                 seen_messages.add(message_key)
                 combined_messages.append(message)
-
-            if combined_messages:
-                break
+                if len(combined_messages) >= max_messages:
+                    return combined_messages
 
         return combined_messages
 
