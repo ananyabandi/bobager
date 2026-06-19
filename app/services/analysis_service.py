@@ -1,4 +1,6 @@
 """Service for aggregating Slack data with Bob LLM analysis."""
+import json
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from app.services.slack_service import slack_service
@@ -25,12 +27,191 @@ class AnalysisService:
         """Initialize analysis service."""
         self.slack_service = slack_service
         self.ollama_client = ollama_client
+
+    @staticmethod
+    def _extract_user_id(candidate: Any) -> Optional[str]:
+        """Normalize Ollama user references into a Slack user ID string."""
+        if isinstance(candidate, str):
+            return candidate
+
+        if isinstance(candidate, dict):
+            for key in ("user_id", "id", "username"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value:
+                    return value
+
+        return None
+
+    @staticmethod
+    def _extract_message_id(candidate: Any) -> Optional[str]:
+        """Normalize Ollama message references into a Slack timestamp string."""
+        if isinstance(candidate, str):
+            return candidate
+
+        if isinstance(candidate, dict):
+            for key in ("message_id", "ts", "id"):
+                value = candidate.get(key)
+                if value is not None:
+                    return str(value)
+
+        return None
+
+    @staticmethod
+    def _display_name(user_data: Dict[str, Any], fallback: str) -> str:
+        """Build a human-readable name for a Slack user."""
+        profile = user_data.get("profile", {}) if isinstance(user_data, dict) else {}
+
+        for value in (
+            user_data.get("real_name") if isinstance(user_data, dict) else None,
+            profile.get("real_name"),
+            user_data.get("name") if isinstance(user_data, dict) else None,
+            profile.get("display_name"),
+            fallback,
+        ):
+            if isinstance(value, str) and value:
+                return value
+
+        return fallback
+
+    @classmethod
+    def _sanitize_insights(cls, insights: str, user_profiles: Dict[str, Dict[str, Any]]) -> str:
+        """Replace or remove Slack-style IDs that are not backed by known user profiles."""
+        sanitized = insights
+
+        for user_id, user_data in user_profiles.items():
+            display_name = cls._display_name(user_data, user_id)
+            sanitized = re.sub(rf"\b{re.escape(user_id)}\b", display_name, sanitized)
+
+        known_user_ids = set(user_profiles)
+
+        def replace_unknown_user(match: re.Match[str]) -> str:
+            user_id = match.group(0)
+            if user_id in known_user_ids:
+                return user_id
+            return "another user"
+
+        return re.sub(r"\bU[A-Z0-9]{2,}\b", replace_unknown_user, sanitized)
+
+    @staticmethod
+    def _build_custom_analysis_search_terms(query: str) -> List[str]:
+        """Derive fallback Slack search terms from a natural-language query."""
+        normalized_query = query.strip()
+        terms: List[str] = [normalized_query] if normalized_query else []
+        lowered = normalized_query.lower()
+        mentions_code = "code" in lowered
+
+        name_matches = re.findall(
+            r"(?:code\s+)?([a-z]+\s+[a-z]+)\s+(?:wrote|posted|put)",
+            lowered,
+        )
+
+        for raw_name in name_matches:
+            cleaned_name = " ".join(part.capitalize() for part in raw_name.split())
+            if mentions_code:
+                terms.append(f'"{cleaned_name}" code')
+                terms.append(f"{cleaned_name} code")
+            terms.append(cleaned_name)
+
+        if mentions_code and not name_matches:
+            condensed = re.sub(r"[^a-z0-9\s]", " ", lowered)
+            condensed = re.sub(r"\s+", " ", condensed).strip()
+            if condensed and condensed != normalized_query:
+                terms.append(condensed)
+
+        unique_terms: List[str] = []
+        seen = set()
+        for term in terms:
+            candidate = term.strip()
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                unique_terms.append(candidate)
+
+        return unique_terms
+
+    async def _get_messages_for_custom_analysis(
+        self,
+        query: str,
+        timeframe_days: int,
+        channels: Optional[List[str]],
+    ) -> List[Dict[str, Any]]:
+        """Search Slack using the original query plus a few derived fallback terms."""
+        search_terms = self._build_custom_analysis_search_terms(query)
+        combined_messages: List[Dict[str, Any]] = []
+        seen_messages = set()
+
+        for search_term in search_terms:
+            messages = await self.slack_service.get_messages_by_topic(
+                topic=search_term,
+                timeframe_days=timeframe_days,
+                channels=channels,
+            )
+
+            for message in messages:
+                message_key = (
+                    str(message.get("ts", "")),
+                    str(message.get("user", "")),
+                    str(message.get("text", "")),
+                )
+                if message_key in seen_messages:
+                    continue
+                seen_messages.add(message_key)
+                combined_messages.append(message)
+
+            if combined_messages:
+                break
+
+        return combined_messages
+
+    def _build_fallback_experts(
+        self,
+        topic: str,
+        qualified_users: Dict[str, Dict[str, Any]],
+        user_profiles: Dict[str, Dict[str, Any]]
+    ) -> List[ExpertProfile]:
+        """Build heuristic expert results when the LLM does not return any valid experts."""
+        ranked_users = sorted(
+            qualified_users.items(),
+            key=lambda item: (
+                item[1].get("message_count", 0),
+                item[1].get("reaction_count", 0),
+                item[1].get("thread_count", 0),
+            ),
+            reverse=True,
+        )
+        highest_message_count = ranked_users[0][1].get("message_count", 1) if ranked_users else 1
+        experts: List[ExpertProfile] = []
+
+        for user_id, user_activity in ranked_users[:5]:
+            user_data = user_profiles.get(user_id, {})
+            message_count = user_activity.get("message_count", 0)
+            score = 0.5 + 0.4 * (message_count / max(highest_message_count, 1))
+            display_name = self._display_name(user_data, user_id)
+            relevant_messages = [
+                self.slack_service.convert_to_message_summary(msg)
+                for msg in user_activity.get("messages", [])[:10]
+            ]
+
+            experts.append(
+                ExpertProfile(
+                    user=self.slack_service.convert_to_user_profile(user_data),
+                    expertise_score=min(score, 0.95),
+                    message_count=message_count,
+                    relevant_messages=relevant_messages,
+                    key_topics=[topic],
+                    analysis=(
+                        f"{display_name} mentioned {topic} in {message_count} matching "
+                        f"message{'s' if message_count != 1 else ''}."
+                    ),
+                )
+            )
+
+        return experts
     
     async def find_experts(
         self,
         topic: str,
         timeframe_days: int = 30,
-        min_messages: int = 5,
+        min_messages: int = 1,
         channels: Optional[List[str]] = None
     ) -> ExpertResponse:
         """
@@ -45,7 +226,9 @@ class AnalysisService:
         Returns:
             ExpertResponse with ranked experts
         """
-        cache_key = f"experts_{topic}_{timeframe_days}_{min_messages}_{channels}"
+        # Convert channels list to tuple for hashable cache key
+        channels_key = tuple(channels) if channels else None
+        cache_key = f"experts_{topic}_{timeframe_days}_{min_messages}_{channels_key}"
         cached = cache_manager.get(cache_key)
         if cached:
             return cached
@@ -124,6 +307,17 @@ class AnalysisService:
                     analysis=bob_expert.get("analysis", "")
                 )
                 experts.append(expert)
+
+            if not experts and qualified_users:
+                logger.info(
+                    "Ollama returned no valid experts for topic '%s'; using Slack activity fallback",
+                    topic,
+                )
+                experts = self._build_fallback_experts(
+                    topic=topic,
+                    qualified_users=qualified_users,
+                    user_profiles=user_profiles,
+                )
             
             # Sort by expertise score
             experts.sort(key=lambda x: x.expertise_score, reverse=True)
@@ -277,17 +471,18 @@ class AnalysisService:
         Returns:
             AnalysisResponse with insights
         """
-        cache_key = f"analysis_{query}_{channels}_{timeframe_days}"
+        # Convert channels list to tuple for hashable cache key
+        channels_key = tuple(channels) if channels else None
+        cache_key = f"analysis_{query}_{channels_key}_{timeframe_days}"
         cached = cache_manager.get(cache_key)
         if cached:
             return cached
         
         try:
-            # Get relevant messages (use query as search term)
-            messages = await self.slack_service.get_messages_by_topic(
-                topic=query,
+            messages = await self._get_messages_for_custom_analysis(
+                query=query,
                 timeframe_days=timeframe_days,
-                channels=channels
+                channels=channels,
             )
             
             if not messages:
@@ -314,7 +509,14 @@ class AnalysisService:
             )
             
             # Extract relevant users
-            relevant_user_ids = bob_analysis.get("relevant_users", [])
+            relevant_user_ids = [
+                user_id
+                for user_id in (
+                    self._extract_user_id(candidate)
+                    for candidate in bob_analysis.get("relevant_users", [])
+                )
+                if user_id
+            ]
             relevant_users = [
                 self.slack_service.convert_to_user_profile(user_profiles.get(uid, {}))
                 for uid in relevant_user_ids
@@ -322,16 +524,32 @@ class AnalysisService:
             ]
             
             # Extract relevant messages
-            relevant_msg_ids = bob_analysis.get("key_messages", [])
+            relevant_msg_ids = {
+                message_id
+                for message_id in (
+                    self._extract_message_id(candidate)
+                    for candidate in bob_analysis.get("key_messages", [])
+                )
+                if message_id
+            }
             relevant_messages = [
                 self.slack_service.convert_to_message_summary(msg)
                 for msg in messages
                 if msg.get("ts") in relevant_msg_ids
             ]
             
+            # Handle insights - convert to string if it's a dict
+            insights_data = bob_analysis.get("insights", "")
+            if isinstance(insights_data, dict):
+                # Convert dict to formatted string
+                insights = json.dumps(insights_data, indent=2)
+            else:
+                insights = str(insights_data)
+            insights = self._sanitize_insights(insights, user_profiles)
+            
             response = AnalysisResponse(
                 query=query,
-                insights=bob_analysis.get("insights", ""),
+                insights=insights,
                 relevant_users=relevant_users,
                 relevant_messages=relevant_messages,
                 metadata={
@@ -367,7 +585,9 @@ class AnalysisService:
         Returns:
             Dictionary with answer and metadata
         """
-        cache_key = f"search_analyze_{query}_{timeframe_days}_{channels}"
+        # Convert channels list to tuple for hashable cache key
+        channels_key = tuple(channels) if channels else None
+        cache_key = f"search_analyze_{query}_{timeframe_days}_{channels_key}"
         cached = cache_manager.get(cache_key)
         if cached:
             return cached

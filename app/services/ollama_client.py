@@ -7,6 +7,18 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+EXPLANATION_HINTS = (
+    "understand",
+    "explain",
+    "what does",
+    "what do",
+    "how does",
+    "walk me through",
+    "summarize",
+    "summary",
+    "code",
+)
+
 
 class OllamaClient:
     """Client for interacting with Ollama LLM."""
@@ -37,6 +49,7 @@ class OllamaClient:
         try:
             # Build context from messages
             context = self._build_message_context(messages, user_profiles)
+            available_user_ids = sorted(user_profiles.keys())
             
             # Create prompt for Ollama
             prompt = f"""Analyze the following Slack messages to identify experts on the topic: "{topic}"
@@ -54,16 +67,14 @@ Task:
 3. Extract key topics each expert discusses
 4. Provide a brief analysis of each expert's contributions
 
+Rules:
+- Use ONLY these Slack user IDs when populating experts: {available_user_ids}
+- If no listed user demonstrates expertise, return an empty experts array
+- Do not invent placeholder IDs or users
+
 Return ONLY a valid JSON response with this exact structure (no markdown, no extra text):
 {{
-    "experts": [
-        {{
-            "user_id": "U123",
-            "expertise_score": 0.85,
-            "key_topics": ["topic1", "topic2"],
-            "analysis": "Brief analysis of expertise"
-        }}
-    ]
+    "experts": []
 }}"""
 
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -115,6 +126,7 @@ Return ONLY a valid JSON response with this exact structure (no markdown, no ext
         """
         try:
             context = self._build_message_context(messages, user_profiles)
+            available_user_ids = sorted(user_profiles.keys())
             
             prompt = f"""Analyze the following messages from the #{channel} Slack channel to identify key contributors.
 
@@ -130,15 +142,14 @@ Task:
    - Community engagement (reactions received, replies generated)
 3. Summarize each contributor's main contributions
 
+Rules:
+- Use ONLY these Slack user IDs when populating contributors: {available_user_ids}
+- If no listed user qualifies, return an empty contributors array
+- Do not invent placeholder IDs or users
+
 Return ONLY a valid JSON response with this exact structure (no markdown, no extra text):
 {{
-    "contributors": [
-        {{
-            "user_id": "U123",
-            "engagement_score": 0.90,
-            "contribution_summary": "Brief summary of contributions"
-        }}
-    ]
+    "contributors": []
 }}"""
 
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -191,10 +202,22 @@ Return ONLY a valid JSON response with this exact structure (no markdown, no ext
         """
         try:
             message_context = self._build_message_context(messages, user_profiles)
+            available_user_ids = sorted(user_profiles.keys())
+            available_message_ids = [str(msg.get("ts")) for msg in messages if msg.get("ts")]
+            explanation_focus = self._query_requests_explanation(query)
             
             additional_context = ""
             if context:
                 additional_context = f"\n\nAdditional Context:\n{context}"
+
+            focus_guidance = """
+Focus on explaining the content, behavior, or purpose of the code or discussion.
+- Answer what the code is doing or what the discussion means.
+- Mention people only when needed for context.
+- Do not turn the answer into a who-talked-about-it summary unless the query explicitly asks who.
+""".strip() if explanation_focus else """
+Focus on the main request in the query and support it with evidence from the messages.
+""".strip()
             
             prompt = f"""Analyze the following Slack messages to answer this query: "{query}"
 
@@ -208,11 +231,21 @@ Provide a comprehensive analysis that addresses the query. Include:
 3. Important messages or threads
 4. Any patterns or trends observed
 
+Analysis Focus:
+{focus_guidance}
+
+Rules:
+- Use ONLY these Slack user IDs when populating relevant_users: {available_user_ids}
+- Use ONLY these message IDs when populating key_messages: {available_message_ids[:50]}
+- If no provided user ID or message ID applies, return an empty list for that field
+- Do not invent placeholder IDs, users, or messages
+- In insights, prefer names from the message context and do not mention raw Slack IDs unless they appear in the provided lists
+
 Return ONLY a valid JSON response with this exact structure (no markdown, no extra text):
 {{
     "insights": "Detailed analysis and insights",
-    "relevant_users": ["U123", "U456"],
-    "key_messages": ["message_id1", "message_id2"]
+    "relevant_users": [],
+    "key_messages": []
 }}"""
 
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -243,6 +276,12 @@ Return ONLY a valid JSON response with this exact structure (no markdown, no ext
         except Exception as e:
             logger.error(f"Error in custom analysis: {e}")
             raise
+
+    @staticmethod
+    def _query_requests_explanation(query: str) -> bool:
+        """Return True when the user is asking to understand or explain something."""
+        lowered = query.lower()
+        return any(hint in lowered for hint in EXPLANATION_HINTS)
     
     async def analyze_topic_discussion(
         self,
@@ -326,7 +365,6 @@ Return ONLY the natural language answer text (no JSON, no markdown, just the ans
             raise
         except Exception as e:
             logger.error(f"Error analyzing topic discussion: {e}")
-            raise
             raise
     
     def _build_message_context(

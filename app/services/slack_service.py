@@ -218,6 +218,11 @@ class SlackService:
         """
         ts = slack_message.get("ts", "0")
         timestamp = datetime.fromtimestamp(float(ts))
+        channel_data = slack_message.get("channel", "")
+        if isinstance(channel_data, dict):
+            channel_name = channel_data.get("name") or channel_data.get("id", "")
+        else:
+            channel_name = channel_data
         
         reactions = []
         if "reactions" in slack_message:
@@ -226,7 +231,7 @@ class SlackService:
         return MessageSummary(
             message_id=ts,
             user_id=slack_message.get("user", ""),
-            channel=slack_message.get("channel", ""),
+            channel=channel_name,
             timestamp=timestamp,
             text=slack_message.get("text", ""),
             reactions=reactions if reactions else None,

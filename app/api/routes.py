@@ -51,7 +51,7 @@ async def health_check():
 async def find_experts(
     topic: str,
     timeframe_days: int = Query(default=30, ge=1, le=365),
-    min_messages: int = Query(default=5, ge=1),
+    min_messages: int = Query(default=1, ge=1),
     channels: Optional[str] = Query(default=None, description="Comma-separated channel names")
 ):
     """

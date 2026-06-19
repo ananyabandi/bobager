@@ -1,9 +1,14 @@
 """Tests for API endpoints."""
+import json
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch
 from datetime import datetime
 from app.main import app
+from chat_with_slack import format_results, parse_user_query
+from app.services.analysis_service import analysis_service
+from app.services.slack_service import slack_service
+from app.utils.cache import cache_manager
 from app.models.schemas import (
     ExpertResponse,
     ContributorResponse,
@@ -163,6 +168,318 @@ def test_custom_analysis():
         data = response.json()
         assert data["query"] == "Who are the DevOps experts?"
         assert "insights" in data
+
+
+@pytest.mark.asyncio
+async def test_custom_analysis_handles_dict_references():
+    """Custom analysis tolerates dict-shaped user and message references from Ollama."""
+    messages = [
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": "general",
+            "text": "Pizza Friday is back"
+        }
+    ]
+    user_profiles = {
+        "U123": {
+            "id": "U123",
+            "name": "david",
+            "real_name": "David"
+        }
+    }
+
+    with patch.object(analysis_service.slack_service, "get_messages_by_topic", new=AsyncMock(return_value=messages)), \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(
+             analysis_service.ollama_client,
+             "custom_analysis",
+             new=AsyncMock(
+                 return_value={
+                     "insights": {"summary": "David mentions pizza the most."},
+                     "relevant_users": [{"user_id": "U123"}],
+                     "key_messages": [{"ts": "123.456"}]
+                 }
+             )
+         ):
+        result = await analysis_service.custom_analysis("Who talks about pizza the most?")
+
+    assert result.relevant_users[0].user_id == "U123"
+    assert result.relevant_messages[0].message_id == "123.456"
+    assert "summary" in result.insights
+
+
+@pytest.mark.asyncio
+async def test_custom_analysis_sanitizes_unknown_user_ids():
+    """Insights should not leak fabricated Slack IDs from model output."""
+    messages = [
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": "general",
+            "text": "DevOps automation is improving deployments"
+        }
+    ]
+    user_profiles = {
+        "U123": {
+            "id": "U123",
+            "name": "david",
+            "real_name": "David"
+        }
+    }
+
+    with patch.object(analysis_service.slack_service, "get_messages_by_topic", new=AsyncMock(return_value=messages)), \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(
+             analysis_service.ollama_client,
+             "custom_analysis",
+             new=AsyncMock(
+                 return_value={
+                     "insights": "U123 and U456 mentioned devops the most.",
+                     "relevant_users": ["U123", "U456"],
+                     "key_messages": []
+                 }
+             )
+         ):
+        result = await analysis_service.custom_analysis("Who mentions devops the most?")
+
+    assert "David" in result.insights
+    assert "U456" not in result.insights
+    assert [user.user_id for user in result.relevant_users] == ["U123"]
+
+
+@pytest.mark.asyncio
+async def test_format_results_uses_validated_custom_analysis_fields():
+    """Chat formatting for custom analysis should not invoke the LLM a second time."""
+    response = AnalysisResponse(
+        query="Who mentions devops the most?",
+        insights="David mentions devops the most.",
+        relevant_users=[
+            UserProfile(
+                user_id="U123",
+                username="david",
+                real_name="David"
+            )
+        ],
+        relevant_messages=[],
+        metadata={
+            "total_messages_analyzed": 1,
+            "channels_searched": "all",
+            "timeframe_days": 30
+        },
+        analysis_timestamp=datetime.now()
+    )
+
+    formatted = await format_results("custom_analysis", response, response.query)
+
+    assert "David mentions devops the most." in formatted
+    assert "Relevant people: David (@david)." in formatted
+
+
+@pytest.mark.asyncio
+async def test_parse_user_query_preserves_explanation_intent():
+    """Explanation-style custom analysis should keep the full user query."""
+    mock_response = json.dumps({
+        "tool": "custom_analysis",
+        "params": {"query": "Anna Bob's code"}
+    })
+
+    with patch("chat_with_slack.call_ollama", new=AsyncMock(return_value=mock_response)):
+        result = await parse_user_query("hi i am a new intern and i need help understanding the code Anna Bob wrote")
+
+    assert result == {
+        "tool": "custom_analysis",
+        "params": {
+            "query": "hi i am a new intern and i need help understanding the code Anna Bob wrote"
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_format_results_skips_people_section_for_explanation_queries():
+    """Explanation-style custom analysis output should not add a people section."""
+    response = AnalysisResponse(
+        query="help me understand the code Anna Bob wrote",
+        insights="Anna Bob shared HTML for a simple Snake game UI.",
+        relevant_users=[
+            UserProfile(
+                user_id="U123",
+                username="david",
+                real_name="David"
+            )
+        ],
+        relevant_messages=[],
+        metadata={
+            "total_messages_analyzed": 1,
+            "channels_searched": "all",
+            "timeframe_days": 30
+        },
+        analysis_timestamp=datetime.now()
+    )
+
+    formatted = await format_results("custom_analysis", response, response.query)
+
+    assert "Anna Bob shared HTML for a simple Snake game UI." in formatted
+    assert "Relevant people:" not in formatted
+
+
+@pytest.mark.asyncio
+async def test_custom_analysis_uses_fallback_search_terms_for_code_questions():
+    """Explanation-style code questions should retry Slack search with narrower terms."""
+    cache_manager.clear()
+    messages = [
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": "frontend",
+            "text": "<!doctype html><html><body>Snake Game</body></html>",
+        }
+    ]
+    user_profiles = {
+        "U123": {
+            "id": "U123",
+            "name": "anna.bob",
+            "real_name": "Anna Bob",
+        }
+    }
+
+    async def fake_get_messages_by_topic(topic, timeframe_days=30, channels=None):
+        if topic == '"Anna Bob" code':
+            return messages
+        return []
+
+    with patch.object(
+        analysis_service.slack_service,
+        "get_messages_by_topic",
+        new=AsyncMock(side_effect=fake_get_messages_by_topic),
+    ) as mock_get_messages, \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(
+             analysis_service.ollama_client,
+             "custom_analysis",
+             new=AsyncMock(
+                 return_value={
+                     "insights": "Anna Bob shared HTML for a simple Snake game page.",
+                     "relevant_users": [],
+                     "key_messages": []
+                 }
+             ),
+         ):
+        result = await analysis_service.custom_analysis(
+            "What is the code Anna Bob posted in Slack?"
+        )
+
+    searched_terms = [call.kwargs["topic"] for call in mock_get_messages.await_args_list]
+    assert 'What is the code Anna Bob posted in Slack?' in searched_terms
+    assert '"Anna Bob" code' in searched_terms
+    assert result.insights == "Anna Bob shared HTML for a simple Snake game page."
+
+
+@pytest.mark.asyncio
+async def test_find_experts_default_min_messages_includes_single_match():
+    """Default expert lookup should include a real helper even with only one matching message."""
+    cache_manager.clear()
+    messages = [
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": "frontend",
+            "text": "<html><body>Snake Game</body></html>"
+        }
+    ]
+    user_profiles = {
+        "U123": {
+            "id": "U123",
+            "name": "anna.bob",
+            "real_name": "Anna Bob"
+        }
+    }
+
+    with patch.object(analysis_service.slack_service, "get_messages_by_topic", new=AsyncMock(return_value=messages)), \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(analysis_service.slack_service, "aggregate_user_activity", new=AsyncMock(return_value={"U123": {"message_count": 1, "messages": messages}})), \
+         patch.object(
+             analysis_service.ollama_client,
+             "analyze_expertise",
+             new=AsyncMock(return_value={
+                 "experts": [
+                     {
+                         "user_id": "U123",
+                         "expertise_score": 0.91,
+                         "key_topics": ["HTML"],
+                         "analysis": "Anna shared working HTML code."
+                     }
+                 ]
+             })
+         ):
+        result = await analysis_service.find_experts("HTML")
+
+    assert result.total_found == 1
+    assert result.experts[0].user.real_name == "Anna Bob"
+    assert result.experts[0].message_count == 1
+
+
+@pytest.mark.asyncio
+async def test_find_experts_falls_back_when_ollama_returns_no_experts():
+    """If Ollama fails to rank experts, the service should still return qualified Slack matches."""
+    cache_manager.clear()
+    messages = [
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": "frontend",
+            "text": "<!doctype html><html><body>Snake Game</body></html>",
+            "reactions": [],
+            "reply_count": 0,
+        }
+    ]
+    user_profiles = {
+        "U123": {
+            "id": "U123",
+            "name": "anna.bob",
+            "real_name": "Anna Bob",
+        }
+    }
+
+    with patch.object(analysis_service.slack_service, "get_messages_by_topic", new=AsyncMock(return_value=messages)), \
+         patch.object(analysis_service.slack_service, "get_user_profiles", new=AsyncMock(return_value=user_profiles)), \
+         patch.object(
+             analysis_service.slack_service,
+             "aggregate_user_activity",
+             new=AsyncMock(return_value={
+                 "U123": {
+                     "message_count": 1,
+                     "thread_count": 0,
+                     "reaction_count": 0,
+                     "messages": messages,
+                 }
+             }),
+         ), \
+         patch.object(
+             analysis_service.ollama_client,
+             "analyze_expertise",
+             new=AsyncMock(return_value={"experts": []}),
+         ):
+        result = await analysis_service.find_experts("HTML")
+
+    assert result.total_found == 1
+    assert result.experts[0].user.real_name == "Anna Bob"
+    assert result.experts[0].key_topics == ["HTML"]
+    assert "Anna Bob mentioned HTML" in result.experts[0].analysis
+
+
+def test_convert_to_message_summary_handles_channel_dict():
+    """Slack search results may provide channel metadata as a dict instead of a string."""
+    summary = slack_service.convert_to_message_summary(
+        {
+            "ts": "123.456",
+            "user": "U123",
+            "channel": {"id": "C123", "name": "engineering"},
+            "text": "Deployment note"
+        }
+    )
+
+    assert summary.channel == "engineering"
 
 
 def test_cache_stats():

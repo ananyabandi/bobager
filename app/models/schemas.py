@@ -8,7 +8,7 @@ class ExpertRequest(BaseModel):
     """Request model for finding experts."""
     topic: str = Field(..., description="Technology or topic to search for")
     timeframe_days: int = Field(default=30, ge=1, le=365, description="Number of days to look back")
-    min_messages: int = Field(default=5, ge=1, description="Minimum number of messages")
+    min_messages: int = Field(default=1, ge=1, description="Minimum number of messages")
     channels: Optional[List[str]] = Field(default=None, description="Specific channels to search")
 
 
