@@ -1,0 +1,21 @@
+{
+  "name": "bobager",
+  "version": "1.0.0",
+  "description": "A chat tool combining Slack and GitHub intelligence with MCP integration",
+  "type": "module",
+  "scripts": {
+    "install-mcp": "npm install @modelcontextprotocol/server-github"
+  },
+  "keywords": [
+    "chatbot",
+    "slack",
+    "github",
+    "mcp",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/server-github": "^2025.4.8"
+  }
+}
